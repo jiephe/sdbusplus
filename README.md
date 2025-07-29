@@ -2,7 +2,7 @@
 for test &amp; debug dbus api
 
 # build step
-git clone https://github.com/openbmc/sdbusplus.git
+git clone https://github.com/jiephe/sdbusplus.git
 
 cd sdbusplus
 
