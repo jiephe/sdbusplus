@@ -15,28 +15,28 @@
 
 using variant = std::variant<int, std::string>;
 
-int foo(int test)
+int TestFunction(int test)
 {
-    std::cout << "foo(" << test << ") -> " << (test + 1) << "\n";
+    std::cout << "TestFunction(" << test << ") -> " << (test + 1) << "\n";
     return ++test;
 }
 
 // called from coroutine context, can make yielding dbus calls
-int fooYield(boost::asio::yield_context yield,
+int TestFunctionYield(boost::asio::yield_context yield,
              std::shared_ptr<sdbusplus::asio::connection> conn, int test)
 {
     // fetch the real value from testFunction
     boost::system::error_code ec;
-    std::cout << "fooYield(yield, " << test << ")...\n";
+    std::cout << "TestFunctionYield(yield, " << test << ")...\n";
     int testCount = conn->yield_method_call<int>(
         yield, ec, "xyz.openbmc_project.asio-test", "/xyz/openbmc_project/test",
         "xyz.openbmc_project.test", "TestFunction", test);
     if (ec || testCount != (test + 1))
     {
-        std::cout << "call to foo failed: ec = " << ec << '\n';
+        std::cout << "call to TestFunction failed: ec = " << ec << '\n';
         return -1;
     }
-    std::cout << "yielding call to foo OK! (-> " << testCount << ")\n";
+    std::cout << "yielding call to TestFunction OK! (-> " << testCount << ")\n";
     return testCount;
 }
 
@@ -132,13 +132,45 @@ void do_start_async_ipmi_call(std::shared_ptr<sdbusplus::asio::connection> conn,
     }
 }
 
+void do_start_async_ipmi_call2(std::shared_ptr<sdbusplus::asio::connection> conn,
+                              boost::asio::yield_context yield)
+{
+    constexpr uint8_t netFn = 7;
+    constexpr uint8_t lun = 0;
+    constexpr uint8_t cmd = 1;
+    std::map<std::string, variant> options = {{"username", variant("admin")},
+                                              {"privilege", variant(4)}};
+    std::vector<uint8_t> commandData = {4, 3, 2, 1};
+    boost::system::error_code ec;
+    using rResult = std::tuple<uint8_t, uint8_t, uint8_t, uint8_t, std::vector<uint8_t>>;
+    auto reply = conn->yield_method_call<rResult>(
+        yield, ec, "xyz.openbmc_project.asio-test", "/xyz/openbmc_project/test",
+        "xyz.openbmc_project.test", "execute", netFn, lun, cmd, commandData, options);
+    if (ec)
+    {
+        std::cerr << "failed to yield_method_call async_ipmi_call: " << ec.message().c_str() << "\n";
+    }
+
+    auto& [rnetFn, rlun, rcmd, cc, responseData] = reply;
+    std::vector<uint8_t> expRsp = {1, 2, 3, 4};
+    if (rnetFn == uint8_t(netFn + 1) && rlun == lun && rcmd == cmd && cc == 0 &&
+        responseData == expRsp)
+    {
+        std::cerr << "ipmi call2 returns OK!\n";
+    }
+    else
+    {
+        std::cerr << "ipmi call2 returns unexpected response\n";
+    }
+}
+
 auto ipmiInterface(boost::asio::yield_context /*yield*/, uint8_t netFn,
                    uint8_t lun, uint8_t cmd, std::vector<uint8_t>& /*data*/,
                    const std::map<std::string, variant>& /*options*/)
 {
     std::vector<uint8_t> reply = {1, 2, 3, 4};
     uint8_t cc = 0;
-    std::cerr << "ipmiInterface:execute(" << int(netFn) << int(cmd) << ")\n";
+    std::cerr << "execute(" << int(netFn) << ", " << int(cmd) << ")\n";
     return std::make_tuple(uint8_t(netFn + 1), lun, cmd, cc, reply);
 }
 
@@ -215,6 +247,8 @@ T getProperty(sdbusplus::bus::bus& bus, const char* service, const char* path,
 
 int server()
 {
+    std::cout << " server begin......" << "\n";
+
     // setup connection to dbus
     boost::asio::io_context io;
 
@@ -268,13 +302,13 @@ int server()
                                "success: " + std::to_string(callCount));
     });
 
-    iface->register_method("TestFunction", foo);
+    iface->register_method("TestFunction", TestFunction);
 
-    // fooYield has boost::asio::yield_context as first argument
+    // TestFunctionYield has boost::asio::yield_context as first argument
     // so will be executed in coroutine context if called
     iface->register_method("TestYieldFunction",
                            [conn](boost::asio::yield_context yield, int val) {
-                               return fooYield(yield, conn, val);
+                               return TestFunctionYield(yield, conn, val);
                            });
 
     iface->register_method("TestMethodWithMessage", methodWithMessage);
@@ -326,7 +360,7 @@ int client()
     int iValue = getProperty<int>(
             bus, "xyz.openbmc_project.asio-test", "/xyz/openbmc_project/test",
             "xyz.openbmc_project.test", "int");
-    std::cout << "get property int: " << iValue << "\n";
+    std::cout << "get property int: " << iValue << "\n\n\n";
 
     using vecString = std::vector<std::string>;
 
@@ -347,6 +381,7 @@ int client()
     {
         std::cout << s << "\n";  
     } 
+    std::cout << "\n\n";
 
     auto match = sdbusplus::bus::match::match(
         bus,
@@ -393,8 +428,7 @@ int client()
     sTrailTime = getProperty<std::string>(
             bus, "xyz.openbmc_project.asio-test", "/xyz/openbmc_project/test",
             "xyz.openbmc_project.test", "TrailTime");
-    std::cout << "after set get property sTrailTime: " << sTrailTime << "\n";    
-
+    std::cout << "after set get property sTrailTime: " << sTrailTime << "\n\n\n";    
 
     auto testMsg = conn->new_method_call(
         "xyz.openbmc_project.asio-test", "/xyz/openbmc_project/test",
@@ -532,6 +566,9 @@ int client()
     boost::asio::spawn(io, [conn](boost::asio::yield_context yield) {
         do_start_async_ipmi_call(conn, yield);
     });
+    boost::asio::spawn(io, [conn](boost::asio::yield_context yield) {
+        do_start_async_ipmi_call2(conn, yield);
+    });    
     boost::asio::spawn(io, [conn](boost::asio::yield_context yield) {
         do_start_async_to_yield(conn, yield);
     });
