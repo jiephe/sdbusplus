@@ -23,7 +23,7 @@ int main()
 
     for (auto& user : users)
     {
-        std::cout << std::get<std::string>(user) << "\n";
+        std::cout << "id: " << std::get<uint32_t>(user) << " name: " << std::get<std::string>(user) << " path: " << (std::get<message::object_path>(user)).parent_path().filename() << "\n";
     }
 
     return 0;

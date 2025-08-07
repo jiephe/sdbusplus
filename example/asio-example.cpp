@@ -245,9 +245,30 @@ T getProperty(sdbusplus::bus::bus& bus, const char* service, const char* path,
     return std::get<T>(value);
 }
 
+void test_shared_ptr()
+{
+    std::shared_ptr<uint32_t> pU32;
+    if (pU32 == nullptr)
+    {
+        std::cout << "std::shared_ptr default is nullptr" << "\n";
+    }
+    pU32 = std::make_shared<uint32_t>(100);
+    if (pU32 != nullptr)
+    {
+        std::cout << "std::shared_ptr make is not nullptr" << "\n";
+    }
+    pU32.reset();
+    if (pU32 == nullptr)
+    {
+        std::cout << "std::shared_ptr after reset is nullptr" << "\n";
+    }
+}
+
 int server()
 {
     std::cout << " server begin......" << "\n";
+
+    test_shared_ptr();
 
     // setup connection to dbus
     boost::asio::io_context io;
@@ -591,8 +612,125 @@ int client()
     return 0;
 }
 
+#include <filesystem>
+void test_filesystem()
+{
+    for (const auto& entry : std::filesystem::directory_iterator("/home1/w33666/code/YAAP"))
+         //std::filesystem::directory_iterator("/usr/local"))
+    {
+        std::string filename = entry.path().filename().string();
+        if (std::filesystem::is_directory(entry))
+        {
+            if (is_symlink(entry.path()))
+            {
+                std::cout << "dir is soft link: " << filename << "\n";
+                std::filesystem::path truePath = std::filesystem::read_symlink(entry.path());
+                std::cout << "dir is soft link-->: " << truePath.string() << "\n";
+                const std::string& dir = truePath.parent_path().string();
+                std::cout << "parent dir is: " << dir << "\n";
+            }
+            else
+            {
+                std::cout << "dir is: " << filename << "\n";
+                const std::string& dir = entry.path().parent_path().string();
+                std::cout << "parent dir is: " << dir << "\n";
+
+                for (const auto& sub_entry : std::filesystem::directory_iterator(entry.path()))
+                {
+                    std::cout << "sub is: " << sub_entry.path().filename().string() << "\n";
+                }
+            }
+        }
+        else
+        {
+            std::cout << "file is: " << filename << "\n";
+        }
+    }
+}
+
+#include <iostream>
+#include <regex>
+#include <string>
+int test_regex()
+{
+    std::regex pattern(".*ras-error([0-9]+)\\.cper");
+    std::smatch match;
+
+    std::vector<std::string> test_files = {
+        "ras-error123.cper",
+        "log-ras-error45.cper",
+        "some/path/to/ras-error7.cper",
+        "test_ras-error0.cper",
+        "abc123ras-error999.cper",
+        "ras-error.cper",           // 不匹配
+        "ras-error12a.cper",         // 不匹配
+        "ras-error123cpers",         // 不匹配
+        "ras-error123,cper",         // 不匹配
+        "ras-error123\\.cper"        // 不匹配（如果是正确转义正则）
+    };
+
+    for (const auto& file : test_files) {
+        if (std::regex_match(file, match, pattern)) {
+            std::cout << "匹配成功: " << file << " -> kNum = " << std::stoi(match[1]) << "\n";
+        } else {
+            std::cout << "不匹配: " << file << "\n";
+        }
+    }
+
+    return 0;
+}
+
+//#define D_TEST_TIMER
+
+#ifdef D_TEST_TIMER
+boost::asio::io_context io_test;
+boost::asio::deadline_timer* timerEvent = nullptr;
+static long long since_seconds = 0;
+static int test_index = 0;
+
+void test_timer(uint16_t usecond)
+{
+    auto now = std::chrono::system_clock::now();
+    auto duration = now.time_since_epoch();
+    long long seconds = std::chrono::duration_cast<std::chrono::seconds>(duration).count();
+
+    std::cout << "timer begin index : " << test_index << " since last cost time: " << seconds - since_seconds << std::endl;
+
+    sd_journal_print(LOG_INFO, "timer begin index: %d \n", test_index);
+
+    sleep(test_index);
+    test_index++;
+    since_seconds = seconds;
+
+    if (timerEvent != nullptr)
+        delete timerEvent;
+
+    timerEvent = new boost::asio::deadline_timer(io_test, boost::posix_time::seconds(usecond));
+    timerEvent->async_wait(
+        [usecond](const boost::system::error_code ec) {
+            if (ec)
+            {
+                sd_journal_print(LOG_ERR, "fd handler error failed: %s \n",
+                                    ec.message().c_str());
+                return;
+            }
+            test_timer(usecond);
+        });
+}
+#endif
+
 int main(int argc, const char* argv[])
 {
+#ifdef D_TEST_TIMER
+    auto now = std::chrono::system_clock::now();
+    auto duration = now.time_since_epoch();
+    since_seconds = std::chrono::duration_cast<std::chrono::seconds>(duration).count();
+    test_timer(1);
+#else
+    test_filesystem();
+
+    test_regex();
+#endif
     if (argc == 1)
     {
         int pid = fork();
@@ -608,12 +746,18 @@ int main(int argc, const char* argv[])
     }
     if (std::string(argv[1]) == "--server")
     {
+#ifndef D_TEST_TIMER
         return server();
+#endif
     }
     if (std::string(argv[1]) == "--client")
     {
         return client();
     }
+
+#ifdef D_TEST_TIMER
+    io_test.run();
+#endif
     std::cout << "usage: " << argv[0] << " [--server | --client]\n";
     return -1;
 }
